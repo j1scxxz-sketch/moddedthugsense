@@ -1,4 +1,4 @@
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/i77lhm/Libraries/refs/heads/main/Thugsense/Library.lua"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/j1scxxz-sketch/moddedthugsense/refs/heads/main/Library.lua"))()
 
 local Window = Library:Window({
     Name = "you can change the name here",
