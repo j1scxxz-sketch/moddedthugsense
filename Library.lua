@@ -1280,6 +1280,409 @@ local Library do
         return KeybindList
     end
 
+Library.RigPreview = function(self, Data)
+        Data = Data or {}
+
+        local RigPreview = {
+            IsOpen = true,
+            Rotating = false,
+            LastMousePos = nil,
+            CurrentAnimTrack = nil,
+            Animator = nil,
+            RigModel = nil,
+            AngleY = 0,
+            AngleX = 0,
+        }
+
+        local Items = {}
+
+        -- Main draggable frame
+        Items["Frame"] = Instances:Create("Frame", {
+            Parent = Library.Holder.Instance,
+            Name = "\0",
+            Size = UDim2New(0, 160, 0, 200),
+            Position = UDim2New(0, Camera.ViewportSize.X / 2 - 80, 0, Camera.ViewportSize.Y / 2 - 100),
+            BorderColor3 = FromRGB(10, 10, 10),
+            BorderSizePixel = 2,
+            BackgroundColor3 = FromRGB(15, 15, 20),
+        })
+        Items["Frame"]:AddToTheme({ BackgroundColor3 = "Background", BorderColor3 = "Border" })
+        Items["Frame"]:MakeDraggable()
+
+        Instances:Create("UIStroke", {
+            Parent = Items["Frame"].Instance,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+            LineJoinMode = Enum.LineJoinMode.Miter,
+            Name = "\0",
+            Color = FromRGB(27, 27, 32),
+        }):AddToTheme({ Color = "Outline" })
+
+        -- Accent line at top
+        local AccentLine = Instances:Create("Frame", {
+            Parent = Items["Frame"].Instance,
+            Name = "\0",
+            Position = UDim2New(0, -5, 0, -2),
+            BorderColor3 = FromRGB(0, 0, 0),
+            Size = UDim2New(1, 10, 0, 2),
+            BorderSizePixel = 0,
+            BackgroundColor3 = FromRGB(235, 157, 255),
+        })
+        AccentLine:AddToTheme({ BackgroundColor3 = "Accent" })
+        Instances:Create("UIGradient", {
+            Parent = AccentLine.Instance,
+            Rotation = 90,
+            Color = RGBSequence{
+                RGBSequenceKeypoint(0, FromRGB(255, 255, 255)),
+                RGBSequenceKeypoint(1, FromRGB(65, 65, 65))
+            },
+        })
+
+        -- Title label
+        local TitleLabel = Instances:Create("TextLabel", {
+            Parent = Items["Frame"].Instance,
+            FontFace = Library.Font,
+            TextColor3 = FromRGB(215, 215, 215),
+            BorderColor3 = FromRGB(0, 0, 0),
+            Text = "Rig Preview",
+            Name = "\0",
+            Size = UDim2New(1, 0, 0, 15),
+            BackgroundTransparency = 1,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Position = UDim2New(0, 6, 0, 1),
+            BorderSizePixel = 0,
+            TextSize = 12,
+            BackgroundColor3 = FromRGB(255, 255, 255),
+        })
+        TitleLabel:AddToTheme({ TextColor3 = "Text" })
+        Instances:Create("UIStroke", {
+            Parent = TitleLabel.Instance,
+            LineJoinMode = Enum.LineJoinMode.Miter,
+            Name = "\0",
+        }):AddToTheme({ Color = "Text Border" })
+
+        -- ViewportFrame
+        Items["Viewport"] = Instances:Create("ViewportFrame", {
+            Parent = Items["Frame"].Instance,
+            Name = "\0",
+            Position = UDim2New(0, 6, 0, 20),
+            Size = UDim2New(1, -12, 1, -50),
+            BackgroundColor3 = FromRGB(20, 20, 25),
+            BorderColor3 = FromRGB(27, 27, 32),
+            BorderSizePixel = 2,
+            LightDirection = Vector3.new(-1, -2, -1),
+            Ambient = FromRGB(180, 180, 180),
+        })
+        Items["Viewport"]:AddToTheme({ BackgroundColor3 = "Inline", BorderColor3 = "Outline" })
+
+        -- Camera inside viewport
+        local ViewCam = InstanceNew("Camera")
+        ViewCam.FieldOfView = 60
+        ViewCam.Parent = Items["Viewport"].Instance
+        Items["Viewport"].Instance.CurrentCamera = ViewCam
+
+        -- Clone local character into viewport
+        local function LoadCharacter()
+            if RigPreview.RigModel then
+                RigPreview.RigModel:Destroy()
+                RigPreview.RigModel = nil
+                RigPreview.Animator = nil
+                RigPreview.CurrentAnimTrack = nil
+            end
+
+            local char = LocalPlayer.Character
+            if not char then return end
+
+            local clone = char:Clone()
+            -- Strip scripts so nothing runs on clone
+            for _, v in clone:GetDescendants() do
+                if v:IsA("Script") or v:IsA("LocalScript") or v:IsA("ModuleScript") then
+                    v:Destroy()
+                end
+            end
+
+            clone.Parent = Items["Viewport"].Instance
+            RigPreview.RigModel = clone
+
+            -- Set up animator
+            local humanoid = clone:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                local animCtrl = humanoid:FindFirstChildOfClass("Animator")
+                    or InstanceNew("Animator")
+                animCtrl.Parent = humanoid
+                RigPreview.Animator = animCtrl
+            end
+
+            -- Position camera
+            local rootPart = clone:FindFirstChild("HumanoidRootPart")
+                or clone:FindFirstChild("Torso")
+                or clone.PrimaryPart
+            if rootPart then
+                local cf = rootPart.CFrame
+                ViewCam.CFrame = CFrame.new(cf.Position + Vector3.new(0, 1, 4), cf.Position + Vector3.new(0, 1, 0))
+            end
+        end
+
+        LoadCharacter()
+
+        -- Rotation logic
+        local function UpdateCamera()
+            local model = RigPreview.RigModel
+            if not model then return end
+            local root = model:FindFirstChild("HumanoidRootPart")
+                or model:FindFirstChild("Torso")
+                or model.PrimaryPart
+            if not root then return end
+
+            local center = root.Position + Vector3.new(0, 1, 0)
+            local dist = 4
+            local radY = math.rad(RigPreview.AngleY)
+            local radX = math.rad(math.clamp(RigPreview.AngleX, -40, 40))
+
+            local offset = Vector3.new(
+                dist * math.sin(radY) * math.cos(radX),
+                dist * math.sin(radX),
+                dist * math.cos(radY) * math.cos(radX)
+            )
+            ViewCam.CFrame = CFrame.new(center + offset, center)
+        end
+
+        Items["Viewport"]:Connect("InputBegan", function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                RigPreview.Rotating = true
+                RigPreview.LastMousePos = Vector2New(input.Position.X, input.Position.Y)
+            end
+        end)
+
+        Items["Viewport"]:Connect("InputEnded", function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                RigPreview.Rotating = false
+            end
+        end)
+
+        Library:Connect(UserInputService.InputChanged, function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement and RigPreview.Rotating then
+                local current = Vector2New(input.Position.X, input.Position.Y)
+                if RigPreview.LastMousePos then
+                    local delta = current - RigPreview.LastMousePos
+                    RigPreview.AngleY = RigPreview.AngleY - delta.X * 0.5
+                    RigPreview.AngleX = RigPreview.AngleX + delta.Y * 0.5
+                    UpdateCamera()
+                end
+                RigPreview.LastMousePos = current
+            end
+        end)
+
+        -- Right-click context menu for animation
+        Items["ContextMenu"] = Instances:Create("Frame", {
+            Parent = Library.Holder.Instance,
+            Name = "\0",
+            Size = UDim2New(0, 140, 0, 60),
+            Position = UDim2New(0, 0, 0, 0),
+            BorderColor3 = FromRGB(10, 10, 10),
+            BorderSizePixel = 2,
+            Visible = false,
+            BackgroundColor3 = FromRGB(15, 15, 20),
+            ZIndex = 20,
+        })
+        Items["ContextMenu"]:AddToTheme({ BackgroundColor3 = "Background", BorderColor3 = "Border" })
+        Instances:Create("UIStroke", {
+            Parent = Items["ContextMenu"].Instance,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+            LineJoinMode = Enum.LineJoinMode.Miter,
+            Name = "\0",
+            Color = FromRGB(27, 27, 32),
+            ZIndex = 20,
+        }):AddToTheme({ Color = "Outline" })
+
+        -- TextBox for animation ID
+        local AnimLabel = Instances:Create("TextLabel", {
+            Parent = Items["ContextMenu"].Instance,
+            FontFace = Library.Font,
+            TextColor3 = FromRGB(215, 215, 215),
+            Text = "Animation ID:",
+            Name = "\0",
+            Size = UDim2New(1, -8, 0, 13),
+            Position = UDim2New(0, 4, 0, 4),
+            BackgroundTransparency = 1,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            BorderSizePixel = 0,
+            TextSize = 11,
+            BackgroundColor3 = FromRGB(255, 255, 255),
+            ZIndex = 21,
+        })
+        AnimLabel:AddToTheme({ TextColor3 = "Text" })
+
+        local AnimInputBg = Instances:Create("Frame", {
+            Parent = Items["ContextMenu"].Instance,
+            Name = "\0",
+            Position = UDim2New(0, 4, 0, 18),
+            Size = UDim2New(1, -8, 0, 16),
+            BorderColor3 = FromRGB(27, 27, 32),
+            BorderSizePixel = 2,
+            BackgroundColor3 = FromRGB(33, 33, 36),
+            ZIndex = 21,
+        })
+        AnimInputBg:AddToTheme({ BackgroundColor3 = "Element", BorderColor3 = "Outline" })
+
+        local AnimInput = Instances:Create("TextBox", {
+            Parent = AnimInputBg.Instance,
+            FontFace = Library.Font,
+            TextColor3 = FromRGB(215, 215, 215),
+            Text = "",
+            PlaceholderText = "e.g. 117229339270317",
+            PlaceholderColor3 = FromRGB(120, 120, 120),
+            Name = "\0",
+            Size = UDim2New(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            ClearTextOnFocus = false,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            BorderSizePixel = 0,
+            TextSize = 11,
+            BackgroundColor3 = FromRGB(255, 255, 255),
+            ZIndex = 22,
+        })
+        Instances:Create("UIPadding", {
+            Parent = AnimInput.Instance,
+            PaddingLeft = UDimNew(0, 4),
+        })
+
+        -- Play button
+        local PlayButton = Instances:Create("TextButton", {
+            Parent = Items["ContextMenu"].Instance,
+            FontFace = Library.Font,
+            TextColor3 = FromRGB(215, 215, 215),
+            Text = "Play",
+            AutoButtonColor = false,
+            Name = "\0",
+            Position = UDim2New(0, 4, 0, 38),
+            Size = UDim2New(1, -8, 0, 16),
+            BorderColor3 = FromRGB(27, 27, 32),
+            BorderSizePixel = 2,
+            BackgroundColor3 = FromRGB(33, 33, 36),
+            TextSize = 11,
+            ZIndex = 21,
+        })
+        PlayButton:AddToTheme({ BackgroundColor3 = "Element", BorderColor3 = "Outline" })
+        Instances:Create("UIGradient", {
+            Parent = PlayButton.Instance,
+            Rotation = 90,
+            Color = RGBSequence{
+                RGBSequenceKeypoint(0, FromRGB(255, 255, 255)),
+                RGBSequenceKeypoint(1, FromRGB(100, 100, 100))
+            },
+        })
+
+        local contextOpen = false
+
+        local function CloseContext()
+            contextOpen = false
+            Items["ContextMenu"].Instance.Visible = false
+        end
+
+        Items["Viewport"]:Connect("InputBegan", function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton2 then
+                local mx = input.Position.X
+                local my = input.Position.Y
+                Items["ContextMenu"].Instance.Position = UDim2New(0, mx, 0, my)
+                Items["ContextMenu"].Instance.Visible = true
+                contextOpen = true
+            end
+        end)
+
+        Library:Connect(UserInputService.InputBegan, function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                if contextOpen then
+                    if not Library:IsMouseOverFrame(Items["ContextMenu"]) then
+                        CloseContext()
+                    end
+                end
+            end
+        end)
+
+        PlayButton:Connect("MouseButton1Down", function()
+            local idText = AnimInput.Instance.Text
+            local id = tonumber(idText)
+            if not id then
+                Library:Notification("Invalid animation ID!", 3, FromRGB(255, 80, 80))
+                return
+            end
+
+            local animator = RigPreview.Animator
+            if not animator then
+                Library:Notification("No animator found on rig.", 3, FromRGB(255, 80, 80))
+                return
+            end
+
+            -- Stop existing
+            if RigPreview.CurrentAnimTrack then
+                pcall(function() RigPreview.CurrentAnimTrack:Stop() end)
+                RigPreview.CurrentAnimTrack = nil
+            end
+
+            local anim = InstanceNew("Animation")
+            anim.AnimationId = "rbxassetid://" .. id
+
+            local success, track = pcall(function()
+                return animator:LoadAnimation(anim)
+            end)
+
+            if success and track then
+                track:Play()
+                RigPreview.CurrentAnimTrack = track
+                Library:Notification("Playing animation: " .. id, 3, FromRGB(0, 200, 100))
+            else
+                Library:Notification("Failed to load animation.", 3, FromRGB(255, 80, 80))
+            end
+
+            CloseContext()
+        end)
+
+        -- Refresh button (reload character clone)
+        local RefreshBtn = Instances:Create("TextButton", {
+            Parent = Items["Frame"].Instance,
+            FontFace = Library.Font,
+            TextColor3 = FromRGB(215, 215, 215),
+            Text = "Reload Rig",
+            AutoButtonColor = false,
+            Name = "\0",
+            AnchorPoint = Vector2New(0, 1),
+            Position = UDim2New(0, 6, 1, -4),
+            Size = UDim2New(1, -12, 0, 14),
+            BorderColor3 = FromRGB(27, 27, 32),
+            BorderSizePixel = 2,
+            BackgroundColor3 = FromRGB(33, 33, 36),
+            TextSize = 11,
+        })
+        RefreshBtn:AddToTheme({ BackgroundColor3 = "Element", BorderColor3 = "Outline" })
+        Instances:Create("UIGradient", {
+            Parent = RefreshBtn.Instance,
+            Rotation = 90,
+            Color = RGBSequence{
+                RGBSequenceKeypoint(0, FromRGB(255, 255, 255)),
+                RGBSequenceKeypoint(1, FromRGB(100, 100, 100))
+            },
+        })
+        Instances:Create("UIStroke", {
+            Parent = RefreshBtn.Instance,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+            LineJoinMode = Enum.LineJoinMode.Miter,
+            Name = "\0",
+            Color = FromRGB(27, 27, 32),
+        }):AddToTheme({ Color = "Outline" })
+
+        RefreshBtn:Connect("MouseButton1Down", function()
+            LoadCharacter()
+            UpdateCamera()
+        end)
+
+        function RigPreview:SetVisibility(Bool)
+            Items["Frame"].Instance.Visible = Bool
+        end
+
+        return RigPreview
+    end
+
     Library.CreateColorpicker = function(self, Data)
         local Colorpicker = {
             Hue = 0,
